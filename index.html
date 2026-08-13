@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#12211a" />
+    <meta
+      name="description"
+      content="Dashboard monitoring kelembapan tanah, kontrol relay pompa, dan status ESP32/MQTT untuk budidaya bawang."
+    />
+    <title>Monitoring Bawang · ESP32 + MQTT</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- ============ HEADER ============ -->
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M12 2c1.5 2 2.5 3.8 2.5 6.5A2.5 2.5 0 0 1 12 11a2.5 2.5 0 0 1-2.5-2.5C9.5 5.8 10.5 4 12 2Z" />
+              <path d="M6 13c0-2 1.8-3.5 6-3.5s6 1.5 6 3.5c0 4-2.7 8.5-6 8.5S6 17 6 13Z" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <h1>Monitoring Bawang</h1>
+            <p>Soil moisture &middot; pump relay &middot; ESP32 telemetry</p>
+          </div>
+        </div>
+
+        <div class="status-badges">
+          <span class="badge" id="badge-broker">
+            <span class="dot" id="dot-broker"></span>
+            <span id="text-broker">Broker&hellip;</span>
+          </span>
+          <span class="badge" id="badge-device">
+            <span class="dot" id="dot-device"></span>
+            <span id="text-device">ESP32&hellip;</span>
+          </span>
+        </div>
+      </header>
+
+      <!-- ============ TOP GRID ============ -->
+      <section class="grid grid-top">
+        <!-- Soil gauge -->
+        <article class="card gauge-card">
+          <div class="card-head">
+            <h2>Kelembapan Tanah</h2>
+            <span class="pill" id="soil-state">&mdash;</span>
+          </div>
+          <div class="gauge-wrap">
+            <svg class="gauge" viewBox="0 0 120 120" role="img" aria-label="Soil moisture gauge">
+              <circle class="gauge-track" cx="60" cy="60" r="52" />
+              <circle class="gauge-value" id="gauge-arc" cx="60" cy="60" r="52" />
+            </svg>
+            <div class="gauge-center">
+              <span class="gauge-num" id="soil-percent">--</span>
+              <span class="gauge-unit">%</span>
+            </div>
+          </div>
+          <dl class="metrics">
+            <div><dt>Raw ADC</dt><dd id="soil-raw">--</dd></div>
+            <div><dt>Suhu</dt><dd><span id="temp-val">--</span> &deg;C</dd></div>
+          </dl>
+        </article>
+
+        <!-- Pump control -->
+        <article class="card pump-card">
+          <div class="card-head">
+            <h2>Relay Pompa</h2>
+            <span class="pill" id="pump-state">OFF</span>
+          </div>
+          <button class="pump-toggle" id="pump-toggle" aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7">
+              <path d="M12 2v10" />
+              <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+            </svg>
+            <span id="pump-toggle-label">Pompa Mati</span>
+          </button>
+          <div class="pump-actions">
+            <button class="btn btn-on" id="btn-on" disabled>Turn ON</button>
+            <button class="btn btn-off" id="btn-off" disabled>Turn OFF</button>
+          </div>
+          <p class="hint" id="pump-hint">Menunggu koneksi broker&hellip;</p>
+        </article>
+
+        <!-- Connection status -->
+        <article class="card conn-card">
+          <div class="card-head">
+            <h2>Status Koneksi</h2>
+          </div>
+          <ul class="conn-list">
+            <li>
+              <span class="conn-label"><span class="dot" id="dot-broker-2"></span> Broker MQTT</span>
+              <span class="conn-value" id="conn-broker">&mdash;</span>
+            </li>
+            <li>
+              <span class="conn-label"><span class="dot" id="dot-device-2"></span> Perangkat ESP32</span>
+              <span class="conn-value" id="conn-device">&mdash;</span>
+            </li>
+            <li>
+              <span class="conn-label">Pesan terakhir</span>
+              <span class="conn-value" id="conn-last">&mdash;</span>
+            </li>
+            <li>
+              <span class="conn-label">Broker</span>
+              <span class="conn-value mono" id="conn-url">&mdash;</span>
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <!-- ============ CHART ============ -->
+      <section class="card chart-card">
+        <div class="card-head">
+          <div>
+            <h2>Tren Per Jam</h2>
+            <p class="sub">Rata-rata kelembapan &amp; suhu, 24 jam terakhir</p>
+          </div>
+          <div class="legend">
+            <span class="legend-item"><i class="sw sw-soil"></i>Soil %</span>
+            <span class="legend-item"><i class="sw sw-temp"></i>Suhu &deg;C</span>
+          </div>
+        </div>
+        <div class="chart-box">
+          <canvas id="trend-chart" aria-label="Grafik tren kelembapan dan suhu per jam"></canvas>
+          <p class="chart-empty" id="chart-empty">Belum ada data. Grafik akan terisi seiring data masuk.</p>
+        </div>
+      </section>
+
+      <!-- ============ BOTTOM GRID ============ -->
+      <section class="grid grid-bottom">
+        <!-- Broker settings -->
+        <article class="card settings-card">
+          <div class="card-head"><h2>Pengaturan Broker</h2></div>
+          <form id="broker-form" class="form">
+            <label>URL WebSocket
+              <input type="text" id="in-url" spellcheck="false" placeholder="wss://broker.hivemq.com:8884/mqtt" />
+            </label>
+            <label>Topic Data (JSON)
+              <input type="text" id="in-data" spellcheck="false" placeholder="bawang/soil/data" />
+            </label>
+            <label>Topic Command
+              <input type="text" id="in-cmd" spellcheck="false" placeholder="bawang/soil/cmd" />
+            </label>
+            <div class="form-row">
+              <label>Username <input type="text" id="in-user" spellcheck="false" placeholder="(opsional)" /></label>
+              <label>Password <input type="password" id="in-pass" placeholder="(opsional)" /></label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="btn-connect">Hubungkan Ulang</button>
+              <button type="button" class="btn" id="btn-disconnect">Putuskan</button>
+            </div>
+          </form>
+        </article>
+
+        <!-- Activity log -->
+        <article class="card log-card">
+          <div class="card-head">
+            <h2>Log Aktivitas</h2>
+            <button class="btn btn-sm" id="btn-clear-log">Bersihkan</button>
+          </div>
+          <ul class="log" id="log-list"></ul>
+        </article>
+      </section>
+
+      <footer class="app-footer">
+        <span>Monitoring Bawang</span>
+        <span class="mono" id="foot-clock">--:--:--</span>
+      </footer>
+    </div>
+
+    <!-- Libraries (CDN) -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+    <!-- App scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/mqtt-client.js"></script>
+    <script src="js/chart.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
