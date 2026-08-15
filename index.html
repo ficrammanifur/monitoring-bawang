@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#12211a" />
     <meta
       name="description"
-      content="Dashboard monitoring kelembapan tanah, kontrol relay pompa, dan status ESP32/MQTT untuk budidaya bawang."
+      content="Dashboard monitoring kelembapan tanah, kontrol relay pompa, dan status ESP32/MQTT untuk hidroponik."
     />
-    <title>Monitoring Bawang · ESP32 + MQTT</title>
+    <title>Hydroponic Habib · ESP32 + MQTT</title>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -33,7 +33,7 @@
             </svg>
           </div>
           <div class="brand-text">
-            <h1>Monitoring Bawang</h1>
+            <h1>Hydroponic Habib</h1>
             <p>Soil moisture &middot; pump relay &middot; ESP32 telemetry</p>
           </div>
         </div>
@@ -41,11 +41,11 @@
         <div class="status-badges">
           <span class="badge" id="badge-broker">
             <span class="dot" id="dot-broker"></span>
-            <span id="text-broker">Broker&hellip;</span>
+            <span id="text-broker">Broker…</span>
           </span>
           <span class="badge" id="badge-device">
             <span class="dot" id="dot-device"></span>
-            <span id="text-device">ESP32&hellip;</span>
+            <span id="text-device">ESP32…</span>
           </span>
         </div>
       </header>
@@ -56,7 +56,7 @@
         <article class="card gauge-card">
           <div class="card-head">
             <h2>Kelembapan Tanah</h2>
-            <span class="pill" id="soil-state">&mdash;</span>
+            <span class="pill" id="soil-state">—</span>
           </div>
           <div class="gauge-wrap">
             <svg class="gauge" viewBox="0 0 120 120" role="img" aria-label="Soil moisture gauge">
@@ -70,7 +70,9 @@
           </div>
           <dl class="metrics">
             <div><dt>Raw ADC</dt><dd id="soil-raw">--</dd></div>
-            <div><dt>Suhu</dt><dd><span id="temp-val">--</span> &deg;C</dd></div>
+            <div><dt>Filtered</dt><dd id="soil-filtered">--</dd></div>
+            <div><dt>Status</dt><dd id="soil-status-text">--</dd></div>
+            <div><dt>Mode</dt><dd id="soil-mode">AUTO</dd></div>
           </dl>
         </article>
 
@@ -88,10 +90,11 @@
             <span id="pump-toggle-label">Pompa Mati</span>
           </button>
           <div class="pump-actions">
-            <button class="btn btn-on" id="btn-on" disabled>Turn ON</button>
-            <button class="btn btn-off" id="btn-off" disabled>Turn OFF</button>
+            <button class="btn btn-auto active" id="btn-auto">AUTO</button>
+            <button class="btn btn-on" id="btn-on" disabled>ON</button>
+            <button class="btn btn-off" id="btn-off" disabled>OFF</button>
           </div>
-          <p class="hint" id="pump-hint">Menunggu koneksi broker&hellip;</p>
+          <p class="hint" id="pump-hint">Menunggu koneksi broker…</p>
         </article>
 
         <!-- Connection status -->
@@ -102,19 +105,27 @@
           <ul class="conn-list">
             <li>
               <span class="conn-label"><span class="dot" id="dot-broker-2"></span> Broker MQTT</span>
-              <span class="conn-value" id="conn-broker">&mdash;</span>
+              <span class="conn-value" id="conn-broker">—</span>
             </li>
             <li>
               <span class="conn-label"><span class="dot" id="dot-device-2"></span> Perangkat ESP32</span>
-              <span class="conn-value" id="conn-device">&mdash;</span>
+              <span class="conn-value" id="conn-device">—</span>
             </li>
             <li>
               <span class="conn-label">Pesan terakhir</span>
-              <span class="conn-value" id="conn-last">&mdash;</span>
+              <span class="conn-value" id="conn-last">—</span>
+            </li>
+            <li>
+              <span class="conn-label">Threshold ON</span>
+              <span class="conn-value" id="threshold-on">45%</span>
+            </li>
+            <li>
+              <span class="conn-label">Threshold OFF</span>
+              <span class="conn-value" id="threshold-off">65%</span>
             </li>
             <li>
               <span class="conn-label">Broker</span>
-              <span class="conn-value mono" id="conn-url">&mdash;</span>
+              <span class="conn-value mono" id="conn-url">—</span>
             </li>
           </ul>
         </article>
@@ -124,16 +135,21 @@
       <section class="card chart-card">
         <div class="card-head">
           <div>
-            <h2>Tren Per Jam</h2>
-            <p class="sub">Rata-rata kelembapan &amp; suhu, 24 jam terakhir</p>
+            <h2>Tren Kelembapan</h2>
+            <p class="sub">Rata-rata kelembapan per jam, 24 jam terakhir</p>
           </div>
           <div class="legend">
             <span class="legend-item"><i class="sw sw-soil"></i>Soil %</span>
-            <span class="legend-item"><i class="sw sw-temp"></i>Suhu &deg;C</span>
+            <span class="legend-item" style="border-left: 2px dashed var(--warn); padding-left: 8px;">
+              <i class="sw" style="background: var(--warn); width: 2px; height: 12px;"></i> ON (45%)
+            </span>
+            <span class="legend-item" style="border-left: 2px dashed var(--danger); padding-left: 8px;">
+              <i class="sw" style="background: var(--danger); width: 2px; height: 12px;"></i> OFF (65%)
+            </span>
           </div>
         </div>
         <div class="chart-box">
-          <canvas id="trend-chart" aria-label="Grafik tren kelembapan dan suhu per jam"></canvas>
+          <canvas id="trend-chart" aria-label="Grafik tren kelembapan per jam"></canvas>
           <p class="chart-empty" id="chart-empty">Belum ada data. Grafik akan terisi seiring data masuk.</p>
         </div>
       </section>
@@ -148,10 +164,10 @@
               <input type="text" id="in-url" spellcheck="false" placeholder="wss://broker.hivemq.com:8884/mqtt" />
             </label>
             <label>Topic Data (JSON)
-              <input type="text" id="in-data" spellcheck="false" placeholder="bawang/soil/data" />
+              <input type="text" id="in-data" spellcheck="false" placeholder="hydroponic/habib/sensor/all" />
             </label>
             <label>Topic Command
-              <input type="text" id="in-cmd" spellcheck="false" placeholder="bawang/soil/cmd" />
+              <input type="text" id="in-cmd" spellcheck="false" placeholder="hydroponic/habib/control/relay" />
             </label>
             <div class="form-row">
               <label>Username <input type="text" id="in-user" spellcheck="false" placeholder="(opsional)" /></label>
@@ -175,7 +191,7 @@
       </section>
 
       <footer class="app-footer">
-        <span>Monitoring Bawang</span>
+        <span>Hydroponic Habib &bull; ESP32 + FreeRTOS</span>
         <span class="mono" id="foot-clock">--:--:--</span>
       </footer>
     </div>
