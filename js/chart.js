@@ -1,15 +1,22 @@
 /* ============================================================
    chart.js — hourly time-series aggregation + Chart.js render
-   Every telemetry sample is folded into an hour bucket; the
-   chart shows the 24-hour rolling average of soil % and temp.
+   Every telemetry sample is folded into an hour bucket
    ============================================================ */
 
 (function () {
   class TrendChart {
     constructor(canvasId, historyHours) {
       this.historyHours = historyHours || 24;
-      this.buckets = {}; // hourMs -> { soilSum, soilCount, tempSum, tempCount, samples }
+      this.buckets = {};
       this.chart = this._build(canvasId);
+      this.thresholdOn = 45;
+      this.thresholdOff = 65;
+    }
+
+    setThresholds(on, off) {
+      this.thresholdOn = on;
+      this.thresholdOff = off;
+      this._render();
     }
 
     _build(canvasId) {
@@ -35,16 +42,28 @@
               pointBackgroundColor: "#4ade80",
             },
             {
-              label: "Suhu \u00b0C",
+              label: "Threshold ON",
               data: [],
-              yAxisID: "yTemp",
-              borderColor: "#38bdf8",
-              backgroundColor: "rgba(56, 189, 248, 0.1)",
+              yAxisID: "ySoil",
+              borderColor: "rgba(251, 191, 36, 0.6)",
+              borderDash: [6, 4],
+              borderWidth: 2,
               fill: false,
-              tension: 0.35,
+              tension: 0,
+              pointRadius: 0,
               spanGaps: true,
-              pointRadius: 3,
-              pointBackgroundColor: "#38bdf8",
+            },
+            {
+              label: "Threshold OFF",
+              data: [],
+              yAxisID: "ySoil",
+              borderColor: "rgba(248, 113, 113, 0.6)",
+              borderDash: [6, 4],
+              borderWidth: 2,
+              fill: false,
+              tension: 0,
+              pointRadius: 0,
+              spanGaps: true,
             },
           ],
         },
@@ -75,20 +94,15 @@
               grid: { color: grid },
               ticks: { color: "#4ade80", callback: (v) => v + "%" },
             },
-            yTemp: {
-              position: "right",
-              grid: { drawOnChartArea: false },
-              ticks: { color: "#38bdf8", callback: (v) => v + "\u00b0" },
-            },
           },
         },
       });
     }
 
-    // Fold one reading into its hour bucket.
     record(soil, temp) {
       const hour = Math.floor(Date.now() / 3600000) * 3600000;
-      const b = this.buckets[hour] || { soilSum: 0, soilCount: 0, tempSum: 0, tempCount: 0, samples: 0 };
+      const b = this.buckets[hour] || { soilSum: 0, soilCount: 0, tempSum: 0, tempCount: 0 };
+
       if (soil != null) {
         b.soilSum += soil;
         b.soilCount++;
@@ -97,10 +111,10 @@
         b.tempSum += temp;
         b.tempCount++;
       }
-      b.samples++;
+
       this.buckets[hour] = b;
 
-      // Drop buckets outside the retention window.
+      // Drop old buckets
       const cutoff = hour - (this.historyHours - 1) * 3600000;
       Object.keys(this.buckets).forEach((k) => {
         if (Number(k) < cutoff) delete this.buckets[k];
@@ -114,21 +128,25 @@
         .map(Number)
         .sort((a, b) => a - b);
 
+      if (hours.length === 0) return;
+
       const labels = hours.map((h) =>
         new Date(h).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })
       );
+
       const soil = hours.map((h) => {
         const b = this.buckets[h];
         return b.soilCount ? Math.round((b.soilSum / b.soilCount) * 10) / 10 : null;
       });
-      const temp = hours.map((h) => {
-        const b = this.buckets[h];
-        return b.tempCount ? Math.round((b.tempSum / b.tempCount) * 10) / 10 : null;
-      });
+
+      // Threshold lines
+      const onLine = hours.map(() => this.thresholdOn);
+      const offLine = hours.map(() => this.thresholdOff);
 
       this.chart.data.labels = labels;
       this.chart.data.datasets[0].data = soil;
-      this.chart.data.datasets[1].data = temp;
+      this.chart.data.datasets[1].data = onLine;
+      this.chart.data.datasets[2].data = offLine;
       this.chart.update();
     }
 
