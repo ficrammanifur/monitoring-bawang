@@ -1,11 +1,6 @@
-// mqtt-client.js - Perbaikan untuk koneksi ke ESP32
 /* ============================================================
    mqtt-client.js — thin wrapper around mqtt.js
-   Exposes window.MqttClient with a small event API:
-     onStatus(state)       "idle"|"connecting"|"connected"|"error"|"closed"
-     onTelemetry(data)     parsed JSON payload (normalized)
-     onDevice(online)      device online/offline
-     onLog(text)           human-readable activity line
+   Exposes window.MqttService with event API
    ============================================================ */
 
 (function () {
@@ -53,7 +48,7 @@
         clean: true,
         connectTimeout: 8000,
         reconnectPeriod: 4000,
-        clientId: "bawang-web-" + Math.random().toString(16).slice(2, 10),
+        clientId: "hydroponic-web-" + Math.random().toString(16).slice(2, 10),
       };
       if (config.username) options.username = config.username;
       if (config.password) options.password = config.password;
@@ -69,23 +64,17 @@
       this.client.on("connect", () => {
         this._emit("status", "connected");
         this._log("Broker terhubung");
-        
-        // Subscribe ke topik ESP32
-        // ESP32 publish ke: hydroponic/habib/sensor/all
-        // ESP32 publish ke: hydroponic/habib/sensor/soil
-        // ESP32 publish ke: hydroponic/habib/sensor/moisture
-        // ESP32 publish ke: hydroponic/habib/status/relay
-        // ESP32 publish ke: hydroponic/habib/status/device
-        
+
+        // Subscribe ke semua topik ESP32
         const topics = [
-          config.dataTopic,        // bawang/soil/data -> untuk kompatibilitas
+          config.dataTopic,
           "hydroponic/habib/sensor/all",
           "hydroponic/habib/sensor/soil",
           "hydroponic/habib/sensor/moisture",
           "hydroponic/habib/status/relay",
           "hydroponic/habib/status/device"
         ];
-        
+
         topics.forEach(topic => {
           this.client.subscribe(topic, (err) => {
             if (err) this._log(`Gagal subscribe ${topic}: ${err.message}`);
@@ -112,85 +101,65 @@
         this._emit("device", true);
 
         try {
-          // Coba parse JSON
           const data = JSON.parse(raw);
-          
-          // Normalisasi data dari ESP32
+
           let normalized = {
             soil: null,
             soilRaw: null,
+            filtered: null,
             temp: null,
             pump: null,
             device: null,
             at: this.lastMessageAt,
             mode: null,
-            status: null
+            status: null,
+            relay: null
           };
 
-          // Handler untuk topik ESP32
           if (topic === "hydroponic/habib/sensor/all") {
-            // Format: {"adc":0,"moisture":100,"status":"BASAH","relay":"OFF","mode":"AUTO"}
+            // Format: {"adc":0,"moisture":62,"filtered":62.4,"status":"NORMAL","relay":"OFF","mode":"AUTO"}
             normalized.soil = toNumber(data.moisture);
             normalized.soilRaw = toNumber(data.adc);
+            normalized.filtered = toNumber(data.filtered);
             normalized.pump = data.relay === "ON";
             normalized.mode = data.mode;
             normalized.status = data.status;
             normalized.device = "ESP32";
-          } 
-          else if (topic === "hydroponic/habib/sensor/soil") {
-            // Format: angka ADC
+            this._log(`Data: ${data.status} (${data.filtered}%)`);
+          } else if (topic === "hydroponic/habib/sensor/soil") {
             normalized.soilRaw = toNumber(raw);
-          }
-          else if (topic === "hydroponic/habib/sensor/moisture") {
-            // Format: angka persen
+          } else if (topic === "hydroponic/habib/sensor/moisture") {
             normalized.soil = toNumber(raw);
-          }
-          else if (topic === "hydroponic/habib/status/relay") {
-            // Format: "ON" atau "OFF"
+          } else if (topic === "hydroponic/habib/status/relay") {
             normalized.pump = raw.toUpperCase() === "ON";
-          }
-          else if (topic === "hydroponic/habib/status/device") {
-            // Format: "ONLINE" atau "OFFLINE"
+          } else if (topic === "hydroponic/habib/status/device") {
             normalized.device = raw;
             this._emit("device", raw.toUpperCase() === "ONLINE");
-          }
-          else {
-            // Fallback untuk topik default
+          } else {
             normalized = {
               soil: toNumber(data.soil ?? data.moisture ?? data.humidity),
               soilRaw: toNumber(data.soilRaw ?? data.raw ?? data.adc),
+              filtered: toNumber(data.filtered),
               temp: toNumber(data.temp ?? data.temperature),
               pump: toBool(data.pump ?? data.relay ?? data.pump_state),
               device: typeof data.device === "string" ? data.device : data.status,
               at: this.lastMessageAt,
+              mode: data.mode,
+              status: data.status
             };
           }
-          
+
           this._emit("telemetry", normalized);
-          this._log(`Data dari ${topic}: ${raw.slice(0, 60)}`);
-          
         } catch (e) {
-          // Jika bukan JSON, coba handle sebagai plain text
+          // Handle plain text messages
           if (topic === "hydroponic/habib/sensor/soil") {
-            this._emit("telemetry", {
-              soilRaw: toNumber(raw),
-              at: this.lastMessageAt
-            });
-          } 
-          else if (topic === "hydroponic/habib/sensor/moisture") {
-            this._emit("telemetry", {
-              soil: toNumber(raw),
-              at: this.lastMessageAt
-            });
-          }
-          else if (topic === "hydroponic/habib/status/relay") {
-            this._emit("telemetry", {
-              pump: raw.toUpperCase() === "ON",
-              at: this.lastMessageAt
-            });
-          }
-          else {
-            this._log(`Payload bukan JSON: ${raw.slice(0, 40)}`);
+            this._emit("telemetry", { soilRaw: toNumber(raw), at: this.lastMessageAt });
+          } else if (topic === "hydroponic/habib/sensor/moisture") {
+            this._emit("telemetry", { soil: toNumber(raw), at: this.lastMessageAt });
+          } else if (topic === "hydroponic/habib/status/relay") {
+            this._emit("telemetry", { pump: raw.toUpperCase() === "ON", at: this.lastMessageAt });
+          } else {
+            this._log(`Payload: ${raw.slice(0, 40)}`);
           }
         }
       });
@@ -198,26 +167,35 @@
 
     publishPump(on) {
       if (!this.client || !this.client.connected || !this.config) return false;
-      
-      // Kirim perintah ke ESP32 dengan format yang dimengerti
-      // ESP32 menerima: ON, OFF, AUTO
+
       const command = on ? "ON" : "OFF";
-      const payload = command; // ESP32 expects plain text, not JSON
-      
-      this.client.publish("hydroponic/habib/control/relay", payload, { qos: 1 });
-      this._log(`Kirim perintah pompa: ${command} → hydroponic/habib/control/relay`);
-      
-      // Kirim juga ke topic default untuk kompatibilitas
+      this.client.publish("hydroponic/habib/control/relay", command, { qos: 1 });
+      this._log(`Kirim perintah: ${command} → hydroponic/habib/control/relay`);
+
       if (this.config.commandTopic) {
-        this.client.publish(this.config.commandTopic, JSON.stringify({ pump: on }), { qos: 1 });
+        this.client.publish(this.config.commandTopic, command, { qos: 1 });
       }
-      
+
+      return true;
+    }
+
+    publishMode(mode) {
+      if (!this.client || !this.client.connected || !this.config) return false;
+
+      const command = mode.toUpperCase();
+      this.client.publish("hydroponic/habib/control/relay", command, { qos: 1 });
+      this._log(`Kirim mode: ${command} → hydroponic/habib/control/relay`);
+
+      if (this.config.commandTopic) {
+        this.client.publish(this.config.commandTopic, command, { qos: 1 });
+      }
+
       return true;
     }
 
     _armDeviceTimeout() {
       clearTimeout(this.deviceTimer);
-      const ms = (this.config && this.config.deviceTimeout) || 12000;
+      const ms = (this.config && this.config.deviceTimeout) || 15000;
       this.deviceTimer = setTimeout(() => this._setDeviceOffline(), ms);
     }
 
@@ -230,9 +208,7 @@
       if (this.client) {
         try {
           this.client.end(true);
-        } catch (e) {
-          /* noop */
-        }
+        } catch (e) { /* noop */ }
         this.client = null;
       }
       if (!silent) {
