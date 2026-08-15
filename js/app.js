@@ -1,3 +1,4 @@
+// app.js - Update untuk menampilkan data ESP32 dengan benar
 /* ============================================================
    app.js — glue: DOM <-> MqttService <-> TrendChart
    ============================================================ */
@@ -29,6 +30,7 @@
 
   // ---- Telemetry state ----
   let pumpOn = false;
+  let lastMode = "AUTO";
 
   // ---- DOM refs ----
   const el = {
@@ -68,7 +70,7 @@
   function renderStatus(state) {
     const map = {
       idle: ["", "Idle", "Idle"],
-      connecting: ["warn", "Menghubungkan\u2026", "Menghubungkan"],
+      connecting: ["warn", "Menghubungkan…", "Menghubungkan"],
       connected: ["on", "Broker OK", "Connected"],
       error: ["off", "Broker Error", "Error"],
       closed: ["off", "Terputus", "Disconnected"],
@@ -84,9 +86,9 @@
     el.btnOff.disabled = !connected;
     el.pumpToggle.disabled = !connected;
     if (!connected) {
-      el.pumpHint.textContent = "Menunggu koneksi broker\u2026";
+      el.pumpHint.textContent = "Menunggu koneksi broker…";
     } else {
-      el.pumpHint.textContent = "Perintah dikirim sebagai {\"pump\": true|false}";
+      el.pumpHint.textContent = "Perintah dikirim sebagai ON/OFF ke ESP32";
     }
   }
 
@@ -98,13 +100,14 @@
   }
 
   function soilStateLabel(pct) {
-    if (pct == null) return ["\u2014", ""];
+    if (pct == null) return ["—", ""];
     if (pct < 30) return ["Kering", "bad"];
-    if (pct < 60) return ["Ideal", "good"];
+    if (pct < 70) return ["Normal", "good"];
     return ["Basah", "warn"];
   }
 
   function renderTelemetry(d) {
+    // Update soil moisture
     if (d.soil != null) {
       const pct = Math.max(0, Math.min(100, d.soil));
       el.soilPercent.textContent = Math.round(pct);
@@ -112,19 +115,35 @@
       const [label, cls] = soilStateLabel(pct);
       el.soilState.textContent = label;
       el.soilState.className = "pill " + cls;
-      // Color the arc by state.
       el.gaugeArc.style.stroke = cls === "bad" ? "#f87171" : cls === "warn" ? "#fbbf24" : "#4ade80";
     }
-    if (d.soilRaw != null) el.soilRaw.textContent = Math.round(d.soilRaw);
-    if (d.temp != null) el.tempVal.textContent = d.temp.toFixed(1);
+    
+    // Update raw ADC
+    if (d.soilRaw != null) {
+      el.soilRaw.textContent = Math.round(d.soilRaw);
+    }
+    
+    // Update mode jika ada
+    if (d.mode) {
+      lastMode = d.mode;
+    }
+    
+    // Update status jika ada (KERING/NORMAL/BASAH)
+    if (d.status) {
+      // Bisa digunakan untuk informasi tambahan
+    }
 
-    if (d.pump != null) setPumpUI(d.pump);
+    // Update pump state
+    if (d.pump != null) {
+      setPumpUI(d.pump);
+    }
 
+    // Update timestamp
     el.connLast.textContent = new Date(d.at).toLocaleTimeString("id-ID");
 
-    // Feed the hourly chart.
-    if (d.soil != null || d.temp != null) {
-      trend.record(d.soil, d.temp);
+    // Feed the hourly chart
+    if (d.soil != null) {
+      trend.record(d.soil, null);
       el.chartEmpty.classList.add("hidden");
     }
   }
@@ -163,7 +182,12 @@
   // ---- Controls ----
   function commandPump(on) {
     const ok = mqtt.publishPump(on);
-    if (ok) setPumpUI(on); // optimistic; device echo will confirm
+    if (ok) {
+      setPumpUI(on);
+      addLog(`Perintah pompa ${on ? "ON" : "OFF"} dikirim ke ESP32`);
+    } else {
+      addLog("Gagal mengirim perintah - koneksi MQTT terputus");
+    }
   }
 
   el.pumpToggle.addEventListener("click", () => commandPump(!pumpOn));
