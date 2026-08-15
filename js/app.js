@@ -1,4 +1,3 @@
-// app.js - Update untuk menampilkan data ESP32 dengan benar
 /* ============================================================
    app.js — glue: DOM <-> MqttService <-> TrendChart
    ============================================================ */
@@ -8,7 +7,7 @@
 
   const $ = (id) => document.getElementById(id);
 
-  // ---- Config (defaults merged with persisted overrides) ----
+  // ---- Config ----
   function loadConfig() {
     const base = { ...window.APP_CONFIG };
     try {
@@ -28,9 +27,12 @@
   const mqtt = new window.MqttService();
   const trend = new window.TrendChart("trend-chart", config.historyHours);
 
+  // Set thresholds
+  trend.setThresholds(config.thresholdOn || 45, config.thresholdOff || 65);
+
   // ---- Telemetry state ----
   let pumpOn = false;
-  let lastMode = "AUTO";
+  let currentMode = "AUTO";
 
   // ---- DOM refs ----
   const el = {
@@ -44,14 +46,20 @@
     connDevice: $("conn-device"),
     connLast: $("conn-last"),
     connUrl: $("conn-url"),
+    thresholdOn: $("threshold-on"),
+    thresholdOff: $("threshold-off"),
     soilPercent: $("soil-percent"),
     soilRaw: $("soil-raw"),
+    soilFiltered: $("soil-filtered"),
     soilState: $("soil-state"),
+    soilStatusText: $("soil-status-text"),
+    soilMode: $("soil-mode"),
     tempVal: $("temp-val"),
     gaugeArc: $("gauge-arc"),
     pumpState: $("pump-state"),
     pumpToggle: $("pump-toggle"),
     pumpToggleLabel: $("pump-toggle-label"),
+    btnAuto: $("btn-auto"),
     btnOn: $("btn-on"),
     btnOff: $("btn-off"),
     pumpHint: $("pump-hint"),
@@ -60,11 +68,16 @@
     footClock: $("foot-clock"),
   };
 
-  const GAUGE_CIRC = 2 * Math.PI * 52; // r=52
+  const GAUGE_CIRC = 2 * Math.PI * 52;
 
   // ---- Rendering helpers ----
   function setDot(node, cls) {
     node.className = "dot" + (cls ? " " + cls : "");
+  }
+
+  function setActiveButton(active) {
+    [el.btnAuto, el.btnOn, el.btnOff].forEach(btn => btn.classList.remove("active"));
+    if (active) active.classList.add("active");
   }
 
   function renderStatus(state) {
@@ -84,11 +97,13 @@
     const connected = state === "connected";
     el.btnOn.disabled = !connected;
     el.btnOff.disabled = !connected;
+    el.btnAuto.disabled = !connected;
     el.pumpToggle.disabled = !connected;
+
     if (!connected) {
       el.pumpHint.textContent = "Menunggu koneksi broker…";
     } else {
-      el.pumpHint.textContent = "Perintah dikirim sebagai ON/OFF ke ESP32";
+      el.pumpHint.textContent = "Mode: " + currentMode + " | Kirim ON/OFF/AUTO";
     }
   }
 
@@ -107,44 +122,53 @@
   }
 
   function renderTelemetry(d) {
-    // Update soil moisture
-    if (d.soil != null) {
-      const pct = Math.max(0, Math.min(100, d.soil));
+    // Soil moisture
+    const value = d.filtered !== null ? d.filtered : d.soil;
+    if (value != null) {
+      const pct = Math.max(0, Math.min(100, value));
       el.soilPercent.textContent = Math.round(pct);
       el.gaugeArc.style.strokeDashoffset = GAUGE_CIRC * (1 - pct / 100);
       const [label, cls] = soilStateLabel(pct);
       el.soilState.textContent = label;
       el.soilState.className = "pill " + cls;
       el.gaugeArc.style.stroke = cls === "bad" ? "#f87171" : cls === "warn" ? "#fbbf24" : "#4ade80";
+      el.soilStatusText.textContent = label;
     }
-    
-    // Update raw ADC
+
+    // Raw ADC
     if (d.soilRaw != null) {
       el.soilRaw.textContent = Math.round(d.soilRaw);
     }
-    
-    // Update mode jika ada
-    if (d.mode) {
-      lastMode = d.mode;
-    }
-    
-    // Update status jika ada (KERING/NORMAL/BASAH)
-    if (d.status) {
-      // Bisa digunakan untuk informasi tambahan
+
+    // Filtered value
+    if (d.filtered != null) {
+      el.soilFiltered.textContent = d.filtered.toFixed(1) + "%";
     }
 
-    // Update pump state
+    // Mode
+    if (d.mode) {
+      currentMode = d.mode;
+      el.soilMode.textContent = currentMode;
+      if (currentMode === "AUTO") setActiveButton(el.btnAuto);
+      else if (currentMode === "ON") setActiveButton(el.btnOn);
+      else if (currentMode === "OFF") setActiveButton(el.btnOff);
+    }
+
+    // Pump state
     if (d.pump != null) {
       setPumpUI(d.pump);
     }
 
-    // Update timestamp
+    // Last update
     el.connLast.textContent = new Date(d.at).toLocaleTimeString("id-ID");
 
-    // Feed the hourly chart
-    if (d.soil != null) {
-      trend.record(d.soil, null);
-      el.chartEmpty.classList.add("hidden");
+    // Chart
+    if (d.soil != null || d.filtered != null) {
+      const chartValue = d.filtered !== null ? d.filtered : d.soil;
+      if (chartValue != null) {
+        trend.record(chartValue, null);
+        el.chartEmpty.classList.add("hidden");
+      }
     }
   }
 
@@ -184,15 +208,52 @@
     const ok = mqtt.publishPump(on);
     if (ok) {
       setPumpUI(on);
-      addLog(`Perintah pompa ${on ? "ON" : "OFF"} dikirim ke ESP32`);
+      addLog(`Perintah pompa ${on ? "ON" : "OFF"} dikirim`);
     } else {
       addLog("Gagal mengirim perintah - koneksi MQTT terputus");
     }
   }
 
-  el.pumpToggle.addEventListener("click", () => commandPump(!pumpOn));
-  el.btnOn.addEventListener("click", () => commandPump(true));
-  el.btnOff.addEventListener("click", () => commandPump(false));
+  function commandMode(mode) {
+    const ok = mqtt.publishMode(mode);
+    if (ok) {
+      currentMode = mode;
+      el.soilMode.textContent = mode;
+      addLog(`Mode diubah ke ${mode}`);
+      if (mode === "AUTO") {
+        setActiveButton(el.btnAuto);
+        el.pumpHint.textContent = "Mode AUTO - Kontrol otomatis berdasarkan kelembaban";
+      } else if (mode === "ON") {
+        setActiveButton(el.btnOn);
+        el.pumpHint.textContent = "Mode ON - Pompa paksa menyala";
+      } else if (mode === "OFF") {
+        setActiveButton(el.btnOff);
+        el.pumpHint.textContent = "Mode OFF - Pompa paksa mati";
+      }
+    } else {
+      addLog("Gagal mengirim mode - koneksi MQTT terputus");
+    }
+  }
+
+  // Toggle pump
+  el.pumpToggle.addEventListener("click", () => {
+    if (currentMode === "AUTO") {
+      addLog("Mode AUTO tidak bisa toggle manual. Gunakan tombol ON/OFF.");
+      return;
+    }
+    commandPump(!pumpOn);
+  });
+
+  // Mode buttons
+  el.btnAuto.addEventListener("click", () => commandMode("AUTO"));
+  el.btnOn.addEventListener("click", () => {
+    commandMode("ON");
+    commandPump(true);
+  });
+  el.btnOff.addEventListener("click", () => {
+    commandMode("OFF");
+    commandPump(false);
+  });
 
   // ---- Broker form ----
   function fillForm() {
@@ -202,6 +263,8 @@
     $("in-user").value = config.username || "";
     $("in-pass").value = config.password || "";
     el.connUrl.textContent = config.url;
+    el.thresholdOn.textContent = (config.thresholdOn || 45) + "%";
+    el.thresholdOff.textContent = (config.thresholdOff || 65) + "%";
   }
 
   $("broker-form").addEventListener("submit", (e) => {
